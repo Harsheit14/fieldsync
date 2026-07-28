@@ -1,13 +1,10 @@
-import 'package:flutter/material.dart';
+import 'package:flutter/widgets.dart';
 
-void main() {
-  runApp(
-    const MaterialApp(
-      home: Scaffold(
-        body: Center(
-          child: Text('FieldSync'),
-        ),
-      ),
-    ),
-  );
+import 'app/app.dart';
+import 'core/config/app_config.dart';
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await AppConfig.initialize();
+  runApp(const FieldSyncApp());
 }
