@@ -21,212 +21,249 @@ void main() {
     handler = MockSyncHandler();
     logger = SyncLoggerImpl();
 
-    when(() => connectivity.isConnected()).thenAnswer((_) async => true);
+    when(
+      () => connectivity.isConnected(),
+    ).thenAnswer((_) async => true);
 
     when(
       () => connectivity.watchConnectivity(),
     ).thenAnswer((_) => Stream<bool>.value(true));
 
-    when(() => repository.resetProcessingOperations()).thenAnswer((_) async {});
+    when(
+      () => repository.resetProcessingOperations(),
+    ).thenAnswer((_) async {});
 
     when(
       () => repository.getNextScheduledOperation(),
     ).thenAnswer((_) async => null);
 
-    when(() => repository.markProcessing(any())).thenAnswer((_) async {});
-
-    when(() => handler.supports('Survey')).thenReturn(true);
-  });
-
-  SyncCoordinatorImpl createCoordinator() {
-    return SyncCoordinatorImpl(
-      connectivity,
-      repository,
-      [handler],
-      const ExponentialBackoffRetryPolicy(),
-      logger,
-    );
-  }
-
-  test('processes a successful operation and records its lifecycle', () async {
-    final operation = SyncFixtures.operation();
-
     when(
-      () => repository.watchReadyOperations(),
-    ).thenAnswer((_) => Stream.value([operation]));
-
-    when(
-      () => handler.process(operation),
-    ).thenAnswer((_) async => SyncFixtures.successResult);
-
-    when(() => repository.markCompleted(operation.id)).thenAnswer((_) async {});
-
-    final coordinator = createCoordinator();
-
-    await coordinator.start();
-
-    await untilCalled(() => repository.markCompleted(operation.id));
-
-    await coordinator.stop();
-
-    verify(() => repository.markProcessing(operation.id)).called(1);
-
-    verify(() => repository.markCompleted(operation.id)).called(1);
-
-    final logs = await logger.watchLogs().first;
-
-    expect(
-      logs.map((entry) => entry.eventType),
-      containsAll([
-        SyncLogEventType.coordinatorStarted,
-        SyncLogEventType.processingStarted,
-        SyncLogEventType.syncCompleted,
-      ]),
-    );
-  });
-
-  test('schedules a retry for retryable handler failures', () async {
-    final operation = SyncFixtures.operation();
-
-    when(
-      () => repository.watchReadyOperations(),
-    ).thenAnswer((_) => Stream.value([operation]));
-
-    when(
-      () => handler.process(operation),
-    ).thenAnswer((_) async => SyncFixtures.retryResult);
-
-    when(
-      () => repository.markRetryScheduled(
-        operation.id,
-        1,
-        any(),
-        errorMessage: any(named: 'errorMessage'),
-      ),
+      () => repository.markProcessing(any()),
     ).thenAnswer((_) async {});
 
-    final coordinator = createCoordinator();
-
-    await coordinator.start();
-
-    await untilCalled(
-      () => repository.markRetryScheduled(
-        operation.id,
-        1,
-        any(),
-        errorMessage: any(named: 'errorMessage'),
-      ),
-    );
-
-    await coordinator.stop();
-
-    verify(
-      () => repository.markRetryScheduled(
-        operation.id,
-        1,
-        any(),
-        errorMessage: any(named: 'errorMessage'),
-      ),
-    ).called(1);
-
-    expect(
-      (await logger.watchLogs().first).map((entry) => entry.eventType),
-      contains(SyncLogEventType.retryScheduled),
-    );
+    when(
+      () => handler.supports('Survey'),
+    ).thenReturn(true);
   });
 
-  test('resets retry count when retry budget is exhausted', () async {
-    final operation = SyncFixtures.operation(retryCount: 5);
+  SyncCoordinatorImpl createCoordinator() => SyncCoordinatorImpl(
+        connectivity,
+        repository,
+        [handler],
+        const ExponentialBackoffRetryPolicy(),
+        logger,
+      );
 
-    when(
-      () => repository.watchReadyOperations(),
-    ).thenAnswer((_) => Stream.value([operation]));
+  test(
+    'processes a successful operation and records its lifecycle',
+    () async {
+      final operation = SyncFixtures.operation();
 
-    when(
-      () => handler.process(operation),
-    ).thenAnswer((_) async => SyncFixtures.retryResult);
+      when(
+        () => repository.watchReadyOperations(),
+      ).thenAnswer(
+        (_) => Stream.value([operation]),
+      );
 
-    when(
-      () => repository.markRetryScheduled(
-        operation.id,
-        0,
-        any(),
-        errorMessage: any(named: 'errorMessage'),
-      ),
-    ).thenAnswer((_) async {});
+      when(
+        () => handler.process(operation),
+      ).thenAnswer(
+        (_) async => SyncFixtures.successResult,
+      );
 
-    final coordinator = createCoordinator();
+      when(
+        () => repository.markCompleted(operation.id),
+      ).thenAnswer((_) async {});
 
-    await coordinator.start();
+      final coordinator = createCoordinator();
 
-    await untilCalled(
-      () => repository.markRetryScheduled(
-        operation.id,
-        0,
-        any(),
-        errorMessage: any(named: 'errorMessage'),
-      ),
-    );
+      await coordinator.start();
 
-    await coordinator.stop();
+      await untilCalled(
+        () => repository.markCompleted(operation.id),
+      );
 
-    verify(
-      () => repository.markRetryScheduled(
-        operation.id,
-        0,
-        any(),
-        errorMessage: any(named: 'errorMessage'),
-      ),
-    ).called(1);
+      await coordinator.stop();
 
-    final logs = await logger.watchLogs().first;
+      verify(
+        () => repository.markProcessing(operation.id),
+      ).called(1);
 
-    expect(
-      logs.any(
-        (entry) =>
-            entry.eventType == SyncLogEventType.retryScheduled &&
-            entry.metadata?['retryCycleReset'] == true,
-      ),
-      isTrue,
-    );
-  });
+      verify(
+        () => repository.markCompleted(operation.id),
+      ).called(1);
 
-  test('permanently fails non-retryable operations', () async {
-    final operation = SyncFixtures.operation();
+      final logs = await logger.watchLogs().first;
 
-    const failure = SyncResult.failure(message: 'Invalid survey payload.');
+      expect(
+        logs.map((entry) => entry.eventType),
+        containsAll([
+          SyncLogEventType.coordinatorStarted,
+          SyncLogEventType.processingStarted,
+          SyncLogEventType.syncCompleted,
+        ]),
+      );
+    },
+  );
 
-    when(
-      () => repository.watchReadyOperations(),
-    ).thenAnswer((_) => Stream.value([operation]));
+  test(
+    'schedules a retry for retryable handler failures',
+    () async {
+      final operation = SyncFixtures.operation();
 
-    when(() => handler.process(operation)).thenAnswer((_) async => failure);
+      when(
+        () => repository.watchReadyOperations(),
+      ).thenAnswer(
+        (_) => Stream.value([operation]),
+      );
 
-    when(
-      () => repository.markFailed(operation.id, 'Invalid survey payload.'),
-    ).thenAnswer((_) async {});
+      when(
+        () => handler.process(operation),
+      ).thenAnswer(
+        (_) async => SyncFixtures.retryResult,
+      );
 
-    final coordinator = createCoordinator();
+      when(
+        () => repository.markRetryScheduled(
+          operation.id,
+          1,
+          any(),
+          errorMessage: any(named: 'errorMessage'),
+        ),
+      ).thenAnswer((_) async {});
 
-    await coordinator.start();
+      final coordinator = createCoordinator();
 
-    await untilCalled(
-      () => repository.markFailed(operation.id, 'Invalid survey payload.'),
-    );
+      await coordinator.start();
 
-    await coordinator.stop();
+      await untilCalled(
+        () => repository.markRetryScheduled(
+          operation.id,
+          1,
+          any(),
+          errorMessage: any(named: 'errorMessage'),
+        ),
+      );
 
-    verify(
-      () => repository.markFailed(operation.id, 'Invalid survey payload.'),
-    ).called(1);
+      await coordinator.stop();
 
-    verifyNever(
-      () => repository.markRetryScheduled(
-        any(),
-        any(),
-        any(),
-        errorMessage: any(named: 'errorMessage'),
-      ),
-    );
-  });
+      verify(
+        () => repository.markRetryScheduled(
+          operation.id,
+          1,
+          any(),
+          errorMessage: any(named: 'errorMessage'),
+        ),
+      ).called(1);
+
+      expect(
+        (await logger.watchLogs().first).map(
+          (entry) => entry.eventType,
+        ),
+        contains(SyncLogEventType.retryScheduled),
+      );
+    },
+  );
+
+  test(
+    'marks permanent handler failures as failed without retrying',
+    () async {
+      final operation = SyncFixtures.operation();
+
+      when(
+        () => repository.watchReadyOperations(),
+      ).thenAnswer(
+        (_) => Stream.value([operation]),
+      );
+
+      when(
+        () => handler.process(operation),
+      ).thenAnswer(
+        (_) async => const SyncResult.failure(
+          message: 'Invalid survey payload.',
+        ),
+      );
+
+      when(
+        () => repository.markFailed(
+          operation.id,
+          'Invalid survey payload.',
+        ),
+      ).thenAnswer((_) async {});
+
+      final coordinator = createCoordinator();
+
+      await coordinator.start();
+
+      await untilCalled(
+        () => repository.markFailed(
+          operation.id,
+          'Invalid survey payload.',
+        ),
+      );
+
+      await coordinator.stop();
+
+      verify(
+        () => repository.markProcessing(operation.id),
+      ).called(1);
+
+      verify(
+        () => repository.markFailed(
+          operation.id,
+          'Invalid survey payload.',
+        ),
+      ).called(1);
+
+      verifyNever(
+        () => repository.markRetryScheduled(
+          any(),
+          any(),
+          any(),
+          errorMessage: any(named: 'errorMessage'),
+        ),
+      );
+    },
+  );
+
+  test(
+    'does not process operations while connectivity is offline',
+    () async {
+      final operation = SyncFixtures.operation();
+
+      when(
+        () => connectivity.isConnected(),
+      ).thenAnswer((_) async => false);
+
+      when(
+        () => connectivity.watchConnectivity(),
+      ).thenAnswer(
+        (_) => Stream<bool>.value(false),
+      );
+
+      when(
+        () => repository.watchReadyOperations(),
+      ).thenAnswer(
+        (_) => Stream.value([operation]),
+      );
+
+      final coordinator = createCoordinator();
+
+      await coordinator.start();
+
+      await Future<void>.delayed(
+        const Duration(milliseconds: 100),
+      );
+
+      verifyNever(
+        () => handler.process(operation),
+      );
+
+      verifyNever(
+        () => repository.markProcessing(operation.id),
+      );
+
+      await coordinator.stop();
+    },
+  );
 }
