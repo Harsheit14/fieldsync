@@ -14,25 +14,44 @@ class PendingOperationsDao extends DatabaseAccessor<AppDatabase>
     return into(pendingOperations).insert(operation);
   }
 
+  /// Returns all pending operations from the local Drift database.
+  ///
+  /// This is useful for debugging and verifying that operations created
+  /// while offline are actually being persisted locally.
+  Future<List<PendingOperation>> getAllOperations() {
+    return (select(pendingOperations)
+          ..orderBy([
+            (operation) => OrderingTerm.desc(operation.createdAt),
+          ]))
+        .get();
+  }
+
   Stream<List<PendingOperation>> watchReadyOperations() {
     final now = DateTime.now();
+
     return (select(pendingOperations)
           ..where(
             (operation) =>
-                operation.status.equals(PendingOperationStatus.pending.name) |
+                operation.status.equals(
+                  PendingOperationStatus.pending.name,
+                ) |
                 (operation.status.equals(
                       PendingOperationStatus.retryScheduled.name,
                     ) &
                     operation.nextRetryAt.isNotNull() &
                     operation.nextRetryAt.isSmallerOrEqualValue(now)),
           )
-          ..orderBy([(operation) => OrderingTerm.asc(operation.createdAt)]))
+          ..orderBy([
+            (operation) => OrderingTerm.asc(operation.createdAt),
+          ]))
         .watch();
   }
 
   Stream<List<PendingOperation>> watchAllOperations() {
     return (select(pendingOperations)
-          ..orderBy([(operation) => OrderingTerm.desc(operation.createdAt)]))
+          ..orderBy([
+            (operation) => OrderingTerm.desc(operation.createdAt),
+          ]))
         .watch();
   }
 
@@ -52,13 +71,18 @@ class PendingOperationsDao extends DatabaseAccessor<AppDatabase>
   }
 
   Future<int> resetProcessingOperations() {
-    return (update(pendingOperations)..where(
-          (operation) =>
-              operation.status.equals(PendingOperationStatus.processing.name),
-        ))
+    return (update(pendingOperations)
+          ..where(
+            (operation) =>
+                operation.status.equals(
+                  PendingOperationStatus.processing.name,
+                ),
+          ))
         .write(
           PendingOperationsCompanion(
-            status: Value(PendingOperationStatus.pending.name),
+            status: Value(
+              PendingOperationStatus.pending.name,
+            ),
             nextRetryAt: const Value<DateTime?>(null),
             lastAttemptAt: const Value<DateTime?>(null),
             errorMessage: const Value<String?>(null),
@@ -72,56 +96,77 @@ class PendingOperationsDao extends DatabaseAccessor<AppDatabase>
     DateTime nextRetryAt, {
     String? errorMessage,
   }) {
-    return (update(
-      pendingOperations,
-    )..where((operation) => operation.id.equals(id))).write(
-      PendingOperationsCompanion(
-        status: Value(PendingOperationStatus.retryScheduled.name),
-        retryCount: Value(retryCount),
-        nextRetryAt: Value<DateTime?>(nextRetryAt),
-        lastAttemptAt: Value<DateTime?>(DateTime.now()),
-        errorMessage: errorMessage == null
-            ? const Value.absent()
-            : Value<String?>(errorMessage),
-      ),
-    );
+    return (update(pendingOperations)
+          ..where(
+            (operation) => operation.id.equals(id),
+          ))
+        .write(
+          PendingOperationsCompanion(
+            status: Value(
+              PendingOperationStatus.retryScheduled.name,
+            ),
+            retryCount: Value(retryCount),
+            nextRetryAt: Value<DateTime?>(nextRetryAt),
+            lastAttemptAt: Value<DateTime?>(DateTime.now()),
+            errorMessage: errorMessage == null
+                ? const Value.absent()
+                : Value<String?>(errorMessage),
+          ),
+        );
   }
 
   Future<int> markProcessing(String id) {
-    return (update(
-      pendingOperations,
-    )..where((operation) => operation.id.equals(id))).write(
-      PendingOperationsCompanion(
-        status: Value(PendingOperationStatus.processing.name),
-        lastAttemptAt: Value<DateTime?>(DateTime.now()),
-        nextRetryAt: const Value<DateTime?>(null),
-        errorMessage: const Value<String?>(null),
-      ),
-    );
+    return (update(pendingOperations)
+          ..where(
+            (operation) => operation.id.equals(id),
+          ))
+        .write(
+          PendingOperationsCompanion(
+            status: Value(
+              PendingOperationStatus.processing.name,
+            ),
+            lastAttemptAt: Value<DateTime?>(DateTime.now()),
+            nextRetryAt: const Value<DateTime?>(null),
+            errorMessage: const Value<String?>(null),
+          ),
+        );
   }
 
   Future<int> markCompleted(String id) {
-    return (update(
-      pendingOperations,
-    )..where((operation) => operation.id.equals(id))).write(
-      PendingOperationsCompanion(
-        status: Value(PendingOperationStatus.completed.name),
-        nextRetryAt: const Value<DateTime?>(null),
-        errorMessage: const Value<String?>(null),
-      ),
-    );
+    return (update(pendingOperations)
+          ..where(
+            (operation) => operation.id.equals(id),
+          ))
+        .write(
+          PendingOperationsCompanion(
+            status: Value(
+              PendingOperationStatus.completed.name,
+            ),
+            nextRetryAt: const Value<DateTime?>(null),
+            errorMessage: const Value<String?>(null),
+          ),
+        );
   }
 
-  Future<int> markFailed(String id, String errorMessage) {
-    return (update(
-      pendingOperations,
-    )..where((operation) => operation.id.equals(id))).write(
-      PendingOperationsCompanion(
-        status: Value(PendingOperationStatus.failed.name),
-        lastAttemptAt: Value<DateTime?>(DateTime.now()),
-        nextRetryAt: const Value<DateTime?>(null),
-        errorMessage: Value<String?>(errorMessage),
-      ),
-    );
+  Future<int> markFailed(
+    String id,
+    String errorMessage,
+  ) {
+    return (update(pendingOperations)
+          ..where(
+            (operation) => operation.id.equals(id),
+          ))
+        .write(
+          PendingOperationsCompanion(
+            status: Value(
+              PendingOperationStatus.failed.name,
+            ),
+            lastAttemptAt: Value<DateTime?>(DateTime.now()),
+            nextRetryAt: const Value<DateTime?>(null),
+            errorMessage: Value<String?>(
+              errorMessage,
+            ),
+          ),
+        );
   }
 }

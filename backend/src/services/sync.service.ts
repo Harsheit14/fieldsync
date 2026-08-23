@@ -1,30 +1,44 @@
 import { withTransaction } from '../config/database.js';
 import { SurveyRepository } from '../repositories/survey.repository.js';
 import { SyncOperationRepository } from '../repositories/sync-operation.repository.js';
-import { SurveyNotFoundError } from './survey.errors.js';
 import type { SyncOperationInput } from '../schemas/sync.schema.js';
 
-export interface SyncOperationResult {
+export type SyncOperationSuccess = {
   success: true;
   operationId: string;
   entityId: string;
   operationType: SyncOperationInput['operationType'];
-}
+};
+
+export type SyncOperationFailure = {
+  success: false;
+  operationId: string;
+  entityId: string;
+  operationType: SyncOperationInput['operationType'];
+  error: {
+    code: 'SURVEY_NOT_FOUND' | 'SURVEY_CONFLICT';
+    message: string;
+  };
+};
+
+export type SyncOperationResult =
+  | SyncOperationSuccess
+  | SyncOperationFailure;
 
 export class SyncService {
   async process(
     operation: SyncOperationInput,
   ): Promise<SyncOperationResult> {
-    return withTransaction(async (client): Promise<SyncOperationResult> => {
+    return withTransaction(async (client) => {
       const syncOperationRepository =
         new SyncOperationRepository(client);
 
-      const surveyRepository = new SurveyRepository(client);
+      const surveyRepository =
+        new SurveyRepository(client);
 
       /*
-       * 1. Try to register the operation.
-       *
-       * operationId is our idempotency key.
+       * Register the operation using operationId as the
+       * idempotency key.
        */
       const createdOperation =
         await syncOperationRepository.create({
@@ -35,10 +49,7 @@ export class SyncService {
         });
 
       /*
-       * 2. Operation already exists.
-       *
-       * Return the previously stored response instead of
-       * executing the operation again.
+       * Idempotency handling.
        */
       if (createdOperation === null) {
         const existingOperation =
@@ -52,56 +63,173 @@ export class SyncService {
           );
         }
 
+        /*
+         * Already completed successfully.
+         */
         if (
           existingOperation.status === 'completed' &&
           existingOperation.response !== null
         ) {
-          return {
-            success: true,
-            operationId: existingOperation.operationId,
-            entityId: existingOperation.entityId,
-            operationType: existingOperation.operationType,
-          };
+          return existingOperation.response as SyncOperationSuccess;
         }
 
+        /*
+         * Previously failed.
+         *
+         * Return the stored failure without executing
+         * the mutation again.
+         */
+        if (
+          existingOperation.status === 'failed' &&
+          existingOperation.response !== null
+        ) {
+          return existingOperation.response as SyncOperationFailure;
+        }
+
+        /*
+         * Another request is currently processing this
+         * operation.
+         */
         throw new Error(
           `Sync operation '${operation.operationId}' is already being processed.`,
         );
       }
 
       /*
-       * 3. Apply the survey mutation using the SAME
-       * PostgreSQL transaction client.
+       * Apply the requested mutation.
+       *
+       * Expected business failures are converted into
+       * structured results. They do NOT throw, allowing
+       * the transaction to commit the failed operation.
        */
       switch (operation.operationType) {
-        case 'create':
-          await surveyRepository.create({
+        case 'create': {
+          const result = await surveyRepository.create({
             ...operation.payload,
             id: operation.entityId,
           });
+
+          if (result.status === 'conflict') {
+            const failure: SyncOperationFailure = {
+              success: false,
+              operationId: operation.operationId,
+              entityId: operation.entityId,
+              operationType: operation.operationType,
+              error: {
+                code: 'SURVEY_CONFLICT',
+                message:
+                  `Survey ${operation.entityId} could not be created because a survey with this entity ID already exists.`,
+              },
+            };
+
+            await syncOperationRepository.markFailed(
+              operation.operationId,
+              failure,
+            );
+
+            return failure;
+          }
+
           break;
+        }
 
         case 'update': {
-          const survey = await surveyRepository.update({
+          const result = await surveyRepository.update({
             ...operation.payload,
             id: operation.entityId,
           });
 
-          if (survey === null) {
-            throw new SurveyNotFoundError(operation.entityId);
+          if (result.status === 'not_found') {
+            const failure: SyncOperationFailure = {
+              success: false,
+              operationId: operation.operationId,
+              entityId: operation.entityId,
+              operationType: operation.operationType,
+              error: {
+                code: 'SURVEY_NOT_FOUND',
+                message:
+                  `Survey '${operation.entityId}' was not found.`,
+              },
+            };
+
+            await syncOperationRepository.markFailed(
+              operation.operationId,
+              failure,
+            );
+
+            return failure;
+          }
+
+          if (result.status === 'conflict') {
+            const failure: SyncOperationFailure = {
+              success: false,
+              operationId: operation.operationId,
+              entityId: operation.entityId,
+              operationType: operation.operationType,
+              error: {
+                code: 'SURVEY_CONFLICT',
+                message:
+                  `Survey ${operation.entityId} could not be updated because a newer version already exists or the survey was already deleted.`,
+              },
+            };
+
+            await syncOperationRepository.markFailed(
+              operation.operationId,
+              failure,
+            );
+
+            return failure;
           }
 
           break;
         }
 
         case 'delete': {
-          const survey = await surveyRepository.delete(
+          const result = await surveyRepository.delete(
             operation.entityId,
             operation.payload.updatedAt,
           );
 
-          if (survey === null) {
-            throw new SurveyNotFoundError(operation.entityId);
+          if (result.status === 'not_found') {
+            const failure: SyncOperationFailure = {
+              success: false,
+              operationId: operation.operationId,
+              entityId: operation.entityId,
+              operationType: operation.operationType,
+              error: {
+                code: 'SURVEY_NOT_FOUND',
+                message:
+                  `Survey '${operation.entityId}' was not found.`,
+              },
+            };
+
+            await syncOperationRepository.markFailed(
+              operation.operationId,
+              failure,
+            );
+
+            return failure;
+          }
+
+          if (result.status === 'conflict') {
+            const failure: SyncOperationFailure = {
+              success: false,
+              operationId: operation.operationId,
+              entityId: operation.entityId,
+              operationType: operation.operationType,
+              error: {
+                code: 'SURVEY_CONFLICT',
+                message:
+                  `Survey ${operation.entityId} could not be deleted because a newer version already exists or the survey was already deleted.`,
+              },
+            };
+
+            await syncOperationRepository.markFailed(
+              operation.operationId,
+              failure,
+            );
+
+            return failure;
           }
 
           break;
@@ -109,9 +237,9 @@ export class SyncService {
       }
 
       /*
-       * 4. Build the successful response.
+       * Successful mutation.
        */
-      const response: SyncOperationResult = {
+      const response: SyncOperationSuccess = {
         success: true,
         operationId: operation.operationId,
         entityId: operation.entityId,
@@ -119,10 +247,8 @@ export class SyncService {
       };
 
       /*
-       * 5. Store the response in the idempotency table.
-       *
-       * This happens inside the SAME transaction as the
-       * survey mutation.
+       * Store the successful response in the SAME
+       * transaction as the survey mutation.
        */
       await syncOperationRepository.markCompleted(
         operation.operationId,

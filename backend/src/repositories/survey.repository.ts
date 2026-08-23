@@ -32,12 +32,60 @@ export interface UpdateSurveyInput extends CreateSurveyInput {}
 
 export type DatabaseClient = typeof database | PoolClient;
 
+export type SurveyMutationResult =
+  | {
+      status: 'updated';
+      survey: SurveyRecord;
+    }
+  | {
+      status: 'not_found';
+    }
+  | {
+      status: 'conflict';
+      current: SurveyRecord;
+    };
+
+export type SurveyCreateResult =
+  | {
+      status: 'created';
+      survey: SurveyRecord;
+    }
+  | {
+      status: 'conflict';
+      current: SurveyRecord;
+    };
+
 export class SurveyRepository {
   constructor(
     private readonly client: DatabaseClient = database,
   ) {}
 
-  async create(input: CreateSurveyInput): Promise<SurveyRecord> {
+  async create(
+    input: CreateSurveyInput,
+  ): Promise<SurveyCreateResult> {
+    /*
+     * Check whether this entity already exists.
+     *
+     * The entity UUID is the permanent identity of the survey.
+     */
+    const existingResult = await this.client.query(
+      `
+      SELECT *
+      FROM surveys
+      WHERE id = $1
+      `,
+      [input.id],
+    );
+
+    if (existingResult.rows.length > 0) {
+      return {
+        status: 'conflict',
+        current: this.toSurveyRecord(
+          existingResult.rows[0],
+        ),
+      };
+    }
+
     const result = await this.client.query(
       `
       INSERT INTO surveys (
@@ -52,7 +100,18 @@ export class SurveyRepository {
         created_at,
         updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10)
+      VALUES (
+        $1,
+        $2,
+        $3,
+        $4,
+        $5,
+        $6,
+        $7::jsonb,
+        $8,
+        $9,
+        $10
+      )
       RETURNING *
       `,
       [
@@ -69,12 +128,48 @@ export class SurveyRepository {
       ],
     );
 
-    return this.toSurveyRecord(result.rows[0]);
+    return {
+      status: 'created',
+      survey: this.toSurveyRecord(result.rows[0]),
+    };
   }
 
   async update(
     input: UpdateSurveyInput,
-  ): Promise<SurveyRecord | null> {
+  ): Promise<SurveyMutationResult> {
+    const existingResult = await this.client.query(
+      `
+      SELECT *
+      FROM surveys
+      WHERE id = $1
+      `,
+      [input.id],
+    );
+
+    if (existingResult.rows.length === 0) {
+      return {
+        status: 'not_found',
+      };
+    }
+
+    const existing = this.toSurveyRecord(
+      existingResult.rows[0],
+    );
+
+    if (existing.isDeleted) {
+      return {
+        status: 'conflict',
+        current: existing,
+      };
+    }
+
+    if (input.updatedAt <= existing.updatedAt) {
+      return {
+        status: 'conflict',
+        current: existing,
+      };
+    }
+
     const result = await this.client.query(
       `
       UPDATE surveys
@@ -89,6 +184,7 @@ export class SurveyRepository {
         updated_at = $9
       WHERE id = $1
         AND is_deleted = FALSE
+        AND updated_at < $9
       RETURNING *
       `,
       [
@@ -105,16 +201,72 @@ export class SurveyRepository {
     );
 
     if (result.rows.length === 0) {
-      return null;
+      const latestResult = await this.client.query(
+        `
+        SELECT *
+        FROM surveys
+        WHERE id = $1
+        `,
+        [input.id],
+      );
+
+      if (latestResult.rows.length === 0) {
+        return {
+          status: 'not_found',
+        };
+      }
+
+      return {
+        status: 'conflict',
+        current: this.toSurveyRecord(
+          latestResult.rows[0],
+        ),
+      };
     }
 
-    return this.toSurveyRecord(result.rows[0]);
+    return {
+      status: 'updated',
+      survey: this.toSurveyRecord(result.rows[0]),
+    };
   }
 
   async delete(
     id: string,
     updatedAt: Date,
-  ): Promise<SurveyRecord | null> {
+  ): Promise<SurveyMutationResult> {
+    const existingResult = await this.client.query(
+      `
+      SELECT *
+      FROM surveys
+      WHERE id = $1
+      `,
+      [id],
+    );
+
+    if (existingResult.rows.length === 0) {
+      return {
+        status: 'not_found',
+      };
+    }
+
+    const existing = this.toSurveyRecord(
+      existingResult.rows[0],
+    );
+
+    if (existing.isDeleted) {
+      return {
+        status: 'conflict',
+        current: existing,
+      };
+    }
+
+    if (updatedAt <= existing.updatedAt) {
+      return {
+        status: 'conflict',
+        current: existing,
+      };
+    }
+
     const result = await this.client.query(
       `
       UPDATE surveys
@@ -123,16 +275,40 @@ export class SurveyRepository {
         updated_at = $2
       WHERE id = $1
         AND is_deleted = FALSE
+        AND updated_at < $2
       RETURNING *
       `,
       [id, updatedAt],
     );
 
     if (result.rows.length === 0) {
-      return null;
+      const latestResult = await this.client.query(
+        `
+        SELECT *
+        FROM surveys
+        WHERE id = $1
+        `,
+        [id],
+      );
+
+      if (latestResult.rows.length === 0) {
+        return {
+          status: 'not_found',
+        };
+      }
+
+      return {
+        status: 'conflict',
+        current: this.toSurveyRecord(
+          latestResult.rows[0],
+        ),
+      };
     }
 
-    return this.toSurveyRecord(result.rows[0]);
+    return {
+      status: 'updated',
+      survey: this.toSurveyRecord(result.rows[0]),
+    };
   }
 
   async findById(

@@ -12,57 +12,134 @@ import 'package:fieldsync/features/sync/domain/logger/sync_logger.dart';
 import 'package:uuid/uuid.dart';
 
 class SurveyRepositoryImpl implements SurveyRepository {
-  SurveyRepositoryImpl(this._surveyDao, this._surveyMapper, this._syncLogger);
+  SurveyRepositoryImpl(
+    this._surveyDao,
+    this._surveyMapper,
+    this._syncLogger,
+  );
 
   final SurveyDao _surveyDao;
   final SurveyMapper _surveyMapper;
   final SyncLogger _syncLogger;
-  late final PendingOperationsDao _pendingOperationsDao = PendingOperationsDao(
-    _surveyDao.attachedDatabase,
-  );
+
+  late final PendingOperationsDao _pendingOperationsDao =
+      PendingOperationsDao(
+        _surveyDao.attachedDatabase,
+      );
+
   static const _pendingOperationMapper = PendingOperationMapper();
   static const _surveyEntityType = 'Survey';
 
   @override
   Future<void> createSurvey(SurveyEntity survey) async {
+    print(
+      '[SYNC DEBUG] CREATE START '
+      'entityId=${survey.id}',
+    );
+
     await _surveyDao.attachedDatabase.transaction(() async {
-      await _surveyDao.insertSurvey(_surveyMapper.toCompanion(survey));
-      await _enqueueOperation(survey, PendingOperationType.create);
+      await _surveyDao.insertSurvey(
+        _surveyMapper.toCompanion(survey),
+      );
+
+      await _enqueueOperation(
+        survey,
+        PendingOperationType.create,
+      );
     });
+
+    print(
+      '[SYNC DEBUG] CREATE COMPLETE '
+      'entityId=${survey.id}',
+    );
   }
 
   @override
   Future<void> updateSurvey(SurveyEntity survey) async {
+    print(
+      '[SYNC DEBUG] UPDATE START '
+      'entityId=${survey.id}',
+    );
+
     await _surveyDao.attachedDatabase.transaction(() async {
-      await _surveyDao.updateSurvey(_surveyMapper.toCompanion(survey));
-      await _enqueueOperation(survey, PendingOperationType.update);
+      await _surveyDao.updateSurvey(
+        _surveyMapper.toCompanion(survey),
+      );
+
+      await _enqueueOperation(
+        survey,
+        PendingOperationType.update,
+      );
     });
+
+    print(
+      '[SYNC DEBUG] UPDATE COMPLETE '
+      'entityId=${survey.id}',
+    );
   }
 
   @override
   Future<void> deleteSurvey(String id) async {
+    print(
+      '[SYNC DEBUG] DELETE START '
+      'entityId=$id',
+    );
+
     await _surveyDao.attachedDatabase.transaction(() async {
       final survey = await _surveyDao.getSurveyById(id);
+
       if (survey == null) {
+        print(
+          '[SYNC DEBUG] DELETE ABORTED '
+          'entityId=$id '
+          'reason=survey_not_found',
+        );
+
         return;
       }
 
       final entity = _surveyMapper.toEntity(survey);
+
+      print(
+        '[SYNC DEBUG] DELETE FOUND '
+        'entityId=${entity.id} '
+        'farmerName=${entity.farmerName}',
+      );
+
       await _surveyDao.markSurveyDeleted(id);
-      await _enqueueOperation(entity, PendingOperationType.delete);
+
+      print(
+        '[SYNC DEBUG] DELETE LOCAL COMPLETE '
+        'entityId=$id',
+      );
+
+      await _enqueueOperation(
+        entity,
+        PendingOperationType.delete,
+      );
     });
+
+    print(
+      '[SYNC DEBUG] DELETE COMPLETE '
+      'entityId=$id',
+    );
   }
 
   @override
   Future<SurveyEntity?> getSurveyById(String id) async {
     final survey = await _surveyDao.getSurveyById(id);
-    return survey == null ? null : _surveyMapper.toEntity(survey);
+
+    return survey == null
+        ? null
+        : _surveyMapper.toEntity(survey);
   }
 
   @override
   Stream<List<SurveyEntity>> watchAllSurveys() {
     return _surveyDao.watchAllSurveys().map(
-      (surveys) => surveys.map(_surveyMapper.toEntity).toList(),
+      (surveys) => surveys
+          .map(_surveyMapper.toEntity)
+          .toList(),
     );
   }
 
@@ -84,6 +161,15 @@ class SurveyRepositoryImpl implements SurveyRepository {
     await _pendingOperationsDao.enqueue(
       _pendingOperationMapper.toCompanion(operation),
     );
+
+    print(
+      '[SYNC DEBUG] QUEUED '
+      'operationId=${operation.id} '
+      'entityId=${operation.entityId} '
+      'type=${operation.operationType.name} '
+      'status=${operation.status.name}',
+    );
+
     await _syncLogger.log(
       SyncLogEntry(
         timestamp: DateTime.now(),
@@ -92,7 +178,9 @@ class SurveyRepositoryImpl implements SurveyRepository {
         entityId: operation.entityId,
         eventType: SyncLogEventType.operationQueued,
         message: 'Operation queued for synchronization.',
-        metadata: {'operationType': operation.operationType.name},
+        metadata: {
+          'operationType': operation.operationType.name,
+        },
       ),
     );
   }

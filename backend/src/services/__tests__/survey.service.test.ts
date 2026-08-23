@@ -10,14 +10,27 @@ import {
 } from '../../repositories/survey.repository.js';
 
 import {
+  SurveyConflictError,
   SurveyNotFoundError,
-  SurveyService,
-} from '../survey.service.js';
+} from '../survey.errors.js';
+
+import { SurveyService } from '../survey.service.js';
 
 class FakeSurveyRepository extends SurveyRepository {
   private readonly surveys = new Map<string, SurveyRecord>();
 
-  override async create(input: CreateSurveyInput): Promise<SurveyRecord> {
+  override async create(
+    input: CreateSurveyInput,
+  ) {
+    const existing = this.surveys.get(input.id);
+
+    if (existing !== undefined) {
+      return {
+        status: 'conflict' as const,
+        current: existing,
+      };
+    }
+
     const survey: SurveyRecord = {
       ...input,
       isDeleted: false,
@@ -25,10 +38,15 @@ class FakeSurveyRepository extends SurveyRepository {
 
     this.surveys.set(survey.id, survey);
 
-    return survey;
+    return {
+      status: 'created' as const,
+      survey,
+    };
   }
 
-  override async findById(id: string): Promise<SurveyRecord | null> {
+  override async findById(
+    id: string,
+  ): Promise<SurveyRecord | null> {
     const survey = this.surveys.get(id);
 
     if (survey === undefined || survey.isDeleted) {
@@ -40,11 +58,27 @@ class FakeSurveyRepository extends SurveyRepository {
 
   override async update(
     input: UpdateSurveyInput,
-  ): Promise<SurveyRecord | null> {
+  ) {
     const existing = this.surveys.get(input.id);
 
-    if (existing === undefined || existing.isDeleted) {
-      return null;
+    if (existing === undefined) {
+      return {
+        status: 'not_found' as const,
+      };
+    }
+
+    if (existing.isDeleted) {
+      return {
+        status: 'conflict' as const,
+        current: existing,
+      };
+    }
+
+    if (input.updatedAt <= existing.updatedAt) {
+      return {
+        status: 'conflict' as const,
+        current: existing,
+      };
     }
 
     const updated: SurveyRecord = {
@@ -55,17 +89,36 @@ class FakeSurveyRepository extends SurveyRepository {
 
     this.surveys.set(updated.id, updated);
 
-    return updated;
+    return {
+      status: 'updated' as const,
+      survey: updated,
+    };
   }
 
   override async delete(
     id: string,
     updatedAt: Date,
-  ): Promise<SurveyRecord | null> {
+  ) {
     const existing = this.surveys.get(id);
 
-    if (existing === undefined || existing.isDeleted) {
-      return null;
+    if (existing === undefined) {
+      return {
+        status: 'not_found' as const,
+      };
+    }
+
+    if (existing.isDeleted) {
+      return {
+        status: 'conflict' as const,
+        current: existing,
+      };
+    }
+
+    if (updatedAt <= existing.updatedAt) {
+      return {
+        status: 'conflict' as const,
+        current: existing,
+      };
     }
 
     const deleted: SurveyRecord = {
@@ -76,7 +129,10 @@ class FakeSurveyRepository extends SurveyRepository {
 
     this.surveys.set(id, deleted);
 
-    return deleted;
+    return {
+      status: 'updated' as const,
+      survey: deleted,
+    };
   }
 }
 
@@ -114,6 +170,18 @@ describe('SurveyService', () => {
     assert.equal(survey.id, input.id);
     assert.equal(survey.farmerName, input.farmerName);
     assert.equal(survey.isDeleted, false);
+  });
+
+  it('throws SurveyConflictError when creating a duplicate survey', async () => {
+    const service = createService();
+    const input = createInput();
+
+    await service.createSurvey(input);
+
+    await assert.rejects(
+      () => service.createSurvey(input),
+      SurveyConflictError,
+    );
   });
 
   it('retrieves an existing survey', async () => {
@@ -165,6 +233,25 @@ describe('SurveyService', () => {
     );
   });
 
+  it('throws SurveyConflictError for a stale update', async () => {
+    const service = createService();
+    const input = createInput();
+
+    await service.createSurvey(input);
+
+    await assert.rejects(
+      () =>
+        service.updateSurvey({
+          ...input,
+          farmerName: 'Stale Update',
+          updatedAt: new Date(
+            input.updatedAt.getTime() - 1000,
+          ),
+        }),
+      SurveyConflictError,
+    );
+  });
+
   it('soft deletes an existing survey', async () => {
     const service = createService();
     const input = createInput();
@@ -173,7 +260,7 @@ describe('SurveyService', () => {
 
     const deleted = await service.deleteSurvey(
       input.id,
-      new Date(Date.now() + 1000),
+      new Date(input.updatedAt.getTime() + 1000),
     );
 
     assert.equal(deleted.id, input.id);
@@ -191,6 +278,22 @@ describe('SurveyService', () => {
     await assert.rejects(
       () => service.deleteSurvey(randomUUID(), new Date()),
       SurveyNotFoundError,
+    );
+  });
+
+  it('throws SurveyConflictError when deleting with a stale timestamp', async () => {
+    const service = createService();
+    const input = createInput();
+
+    await service.createSurvey(input);
+
+    await assert.rejects(
+      () =>
+        service.deleteSurvey(
+          input.id,
+          new Date(input.updatedAt.getTime() - 1000),
+        ),
+      SurveyConflictError,
     );
   });
 });
