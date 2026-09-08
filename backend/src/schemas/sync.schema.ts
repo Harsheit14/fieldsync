@@ -13,12 +13,37 @@ const surveyPayloadSchema = z.object({
   updatedAt: z.coerce.date(),
 });
 
-export const syncOperationSchema = z.object({
-  operationId: z.string().uuid(),
-  entityType: z.literal('Survey'),
-  entityId: z.string().uuid(),
-  operationType: z.enum(['create', 'update', 'delete']),
-  payload: surveyPayloadSchema,
+const deletePayloadSchema = z.object({
+  updatedAt: z.coerce.date(),
 });
 
-export type SyncOperationInput = z.infer<typeof syncOperationSchema>;
+export const syncOperationSchema = z.discriminatedUnion(
+  'operationType',
+  [
+    z.object({
+      operationId: z.string().uuid(),
+      entityType: z.literal('Survey'),
+      entityId: z.string().uuid(),
+      operationType: z.literal('create'),
+      payload: surveyPayloadSchema,
+    }),
+    z.object({
+      operationId: z.string().uuid(),
+      entityType: z.literal('Survey'),
+      entityId: z.string().uuid(),
+      operationType: z.literal('update'),
+      payload: surveyPayloadSchema,
+    }),
+    z.object({
+      operationId: z.string().uuid(),
+      entityType: z.literal('Survey'),
+      entityId: z.string().uuid(),
+      operationType: z.literal('delete'),
+      payload: deletePayloadSchema,
+    }),
+  ],
+);
+
+export type SyncOperationInput = z.infer<
+  typeof syncOperationSchema
+>;

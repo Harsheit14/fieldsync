@@ -1,8 +1,9 @@
+import 'dart:async';
+
 import 'package:fieldsync/features/sync/data/logger/sync_logger_impl.dart';
-import 'package:fieldsync/features/sync/data/policies/exponential_backoff_retry_policy.dart';
 import 'package:fieldsync/features/sync/data/services/sync_coordinator_impl.dart';
-import 'package:fieldsync/features/sync/domain/entities/sync_log_entry.dart';
-import 'package:fieldsync/features/sync/domain/entities/sync_result.dart';
+import 'package:fieldsync/features/sync/domain/entities/pending_operation_entity.dart';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 
@@ -12,258 +13,226 @@ import '../../helpers/mocks/sync_mocks.dart';
 void main() {
   late MockConnectivityService connectivity;
   late MockPendingOperationsRepository repository;
-  late MockSyncHandler handler;
+  late MockSynchronizationService synchronizationService;
   late SyncLoggerImpl logger;
 
   setUp(() {
     connectivity = MockConnectivityService();
     repository = MockPendingOperationsRepository();
-    handler = MockSyncHandler();
+    synchronizationService = MockSynchronizationService();
     logger = SyncLoggerImpl();
 
-    when(
-      () => connectivity.isConnected(),
-    ).thenAnswer((_) async => true);
+    when(() => connectivity.isConnected()).thenAnswer((_) async => true);
 
     when(
       () => connectivity.watchConnectivity(),
     ).thenAnswer((_) => Stream<bool>.value(true));
 
-    when(
-      () => repository.resetProcessingOperations(),
-    ).thenAnswer((_) async {});
+    when(() => repository.resetProcessingOperations()).thenAnswer((_) async {});
 
     when(
       () => repository.getNextScheduledOperation(),
     ).thenAnswer((_) async => null);
 
     when(
-      () => repository.markProcessing(any()),
+      () => synchronizationService.synchronizeOnce(),
     ).thenAnswer((_) async {});
-
-    when(
-      () => handler.supports('Survey'),
-    ).thenReturn(true);
   });
 
-  SyncCoordinatorImpl createCoordinator() => SyncCoordinatorImpl(
-        connectivity,
-        repository,
-        [handler],
-        const ExponentialBackoffRetryPolicy(),
-        logger,
-      );
+  SyncCoordinatorImpl createCoordinator() {
+    return SyncCoordinatorImpl(
+      connectivity,
+      repository,
+      synchronizationService,
+      logger,
+    );
+  }
+
+  test('resets processing operations when the coordinator starts', () async {
+    when(
+      () => repository.watchReadyOperations(),
+    ).thenAnswer((_) => Stream.value(const <PendingOperationEntity>[]));
+
+    final coordinator = createCoordinator();
+
+    await coordinator.start();
+
+    verify(() => repository.resetProcessingOperations()).called(1);
+
+    await coordinator.stop();
+  });
+
+  test('starts synchronization when connectivity is available', () async {
+    when(
+      () => repository.watchReadyOperations(),
+    ).thenAnswer((_) => Stream.value([SyncFixtures.operation()]));
+
+    final coordinator = createCoordinator();
+
+    await coordinator.start();
+
+    await untilCalled(() => synchronizationService.synchronizeOnce());
+
+    verify(() => synchronizationService.synchronizeOnce()).called(1);
+
+    await coordinator.stop();
+  });
 
   test(
-    'processes a successful operation and records its lifecycle',
+    'does not start a second synchronization while one is already running',
     () async {
-      final operation = SyncFixtures.operation();
+      final synchronizationCompleter = Completer<void>();
 
       when(
         () => repository.watchReadyOperations(),
-      ).thenAnswer(
-        (_) => Stream.value([operation]),
-      );
+      ).thenAnswer((_) => Stream.value([SyncFixtures.operation()]));
 
       when(
-        () => handler.process(operation),
-      ).thenAnswer(
-        (_) async => SyncFixtures.successResult,
-      );
-
-      when(
-        () => repository.markCompleted(operation.id),
-      ).thenAnswer((_) async {});
+        () => synchronizationService.synchronizeOnce(),
+      ).thenAnswer((_) => synchronizationCompleter.future);
 
       final coordinator = createCoordinator();
 
       await coordinator.start();
 
-      await untilCalled(
-        () => repository.markCompleted(operation.id),
-      );
+      await untilCalled(() => synchronizationService.synchronizeOnce());
+
+      // Trigger another synchronization while the first one
+      // is still running.
+      await coordinator.syncNow();
+
+      verify(() => synchronizationService.synchronizeOnce()).called(1);
+
+      synchronizationCompleter.complete();
 
       await coordinator.stop();
-
-      verify(
-        () => repository.markProcessing(operation.id),
-      ).called(1);
-
-      verify(
-        () => repository.markCompleted(operation.id),
-      ).called(1);
-
-      final logs = await logger.watchLogs().first;
-
-      expect(
-        logs.map((entry) => entry.eventType),
-        containsAll([
-          SyncLogEventType.coordinatorStarted,
-          SyncLogEventType.processingStarted,
-          SyncLogEventType.syncCompleted,
-        ]),
-      );
     },
   );
 
-  test(
-    'schedules a retry for retryable handler failures',
-    () async {
-      final operation = SyncFixtures.operation();
+  test('stops processing synchronization when connectivity drops', () async {
+    final connectivityController = StreamController<bool>();
+    final synchronizationCompleter = Completer<void>();
 
-      when(
-        () => repository.watchReadyOperations(),
-      ).thenAnswer(
-        (_) => Stream.value([operation]),
-      );
+    addTearDown(connectivityController.close);
 
-      when(
-        () => handler.process(operation),
-      ).thenAnswer(
-        (_) async => SyncFixtures.retryResult,
-      );
+    when(
+      () => connectivity.watchConnectivity(),
+    ).thenAnswer((_) => connectivityController.stream);
 
-      when(
-        () => repository.markRetryScheduled(
-          operation.id,
-          1,
-          any(),
-          errorMessage: any(named: 'errorMessage'),
-        ),
-      ).thenAnswer((_) async {});
+    when(
+      () => repository.watchReadyOperations(),
+    ).thenAnswer((_) => Stream.value([SyncFixtures.operation()]));
 
-      final coordinator = createCoordinator();
+    when(
+      () => synchronizationService.synchronizeOnce(),
+    ).thenAnswer((_) => synchronizationCompleter.future);
 
-      await coordinator.start();
+    final coordinator = createCoordinator();
 
-      await untilCalled(
-        () => repository.markRetryScheduled(
-          operation.id,
-          1,
-          any(),
-          errorMessage: any(named: 'errorMessage'),
-        ),
-      );
+    await coordinator.start();
 
-      await coordinator.stop();
+    // The coordinator skips the first connectivity event.
+    connectivityController.add(true);
 
-      verify(
-        () => repository.markRetryScheduled(
-          operation.id,
-          1,
-          any(),
-          errorMessage: any(named: 'errorMessage'),
-        ),
-      ).called(1);
+    await untilCalled(() => synchronizationService.synchronizeOnce());
 
-      expect(
-        (await logger.watchLogs().first).map(
-          (entry) => entry.eventType,
-        ),
-        contains(SyncLogEventType.retryScheduled),
-      );
-    },
-  );
+    // Simulate online -> offline.
+    connectivityController.add(false);
 
-  test(
-    'marks permanent handler failures as failed without retrying',
-    () async {
-      final operation = SyncFixtures.operation();
+    await Future<void>.delayed(const Duration(milliseconds: 50));
 
-      when(
-        () => repository.watchReadyOperations(),
-      ).thenAnswer(
-        (_) => Stream.value([operation]),
-      );
+    // Complete the synchronization that was already running.
+    synchronizationCompleter.complete();
 
-      when(
-        () => handler.process(operation),
-      ).thenAnswer(
-        (_) async => const SyncResult.failure(
-          message: 'Invalid survey payload.',
-        ),
-      );
+    await Future<void>.delayed(const Duration(milliseconds: 50));
 
-      when(
-        () => repository.markFailed(
-          operation.id,
-          'Invalid survey payload.',
-        ),
-      ).thenAnswer((_) async {});
+    // Attempting another synchronization while offline must
+    // not invoke the synchronization service again.
+    await coordinator.syncNow();
 
-      final coordinator = createCoordinator();
+    verify(() => synchronizationService.synchronizeOnce()).called(1);
 
-      await coordinator.start();
+    await coordinator.stop();
+  });
 
-      await untilCalled(
-        () => repository.markFailed(
-          operation.id,
-          'Invalid survey payload.',
-        ),
-      );
+  test('does not synchronize while connectivity is offline', () async {
+    final operation = SyncFixtures.operation();
 
-      await coordinator.stop();
+    when(() => connectivity.isConnected()).thenAnswer((_) async => false);
 
-      verify(
-        () => repository.markProcessing(operation.id),
-      ).called(1);
+    when(
+      () => connectivity.watchConnectivity(),
+    ).thenAnswer((_) => Stream<bool>.value(false));
 
-      verify(
-        () => repository.markFailed(
-          operation.id,
-          'Invalid survey payload.',
-        ),
-      ).called(1);
+    when(
+      () => repository.watchReadyOperations(),
+    ).thenAnswer((_) => Stream.value([operation]));
 
-      verifyNever(
-        () => repository.markRetryScheduled(
-          any(),
-          any(),
-          any(),
-          errorMessage: any(named: 'errorMessage'),
-        ),
-      );
-    },
-  );
+    final coordinator = createCoordinator();
+
+    await coordinator.start();
+
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+
+    verifyNever(() => synchronizationService.synchronizeOnce());
+
+    await coordinator.stop();
+  });
 
   test(
-    'does not process operations while connectivity is offline',
+    'starts synchronization after reconnecting from offline state',
     () async {
-      final operation = SyncFixtures.operation();
+      final connectivityController = StreamController<bool>();
 
-      when(
-        () => connectivity.isConnected(),
-      ).thenAnswer((_) async => false);
+      addTearDown(connectivityController.close);
+
+      when(() => connectivity.isConnected()).thenAnswer((_) async => false);
 
       when(
         () => connectivity.watchConnectivity(),
-      ).thenAnswer(
-        (_) => Stream<bool>.value(false),
-      );
+      ).thenAnswer((_) => connectivityController.stream);
 
       when(
         () => repository.watchReadyOperations(),
-      ).thenAnswer(
-        (_) => Stream.value([operation]),
-      );
+      ).thenAnswer((_) => Stream.value([SyncFixtures.operation()]));
 
       final coordinator = createCoordinator();
 
       await coordinator.start();
 
-      await Future<void>.delayed(
-        const Duration(milliseconds: 100),
-      );
+      verifyNever(() => synchronizationService.synchronizeOnce());
 
-      verifyNever(
-        () => handler.process(operation),
-      );
+      // First event is skipped by the coordinator.
+      connectivityController.add(false);
 
-      verifyNever(
-        () => repository.markProcessing(operation.id),
-      );
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      // Reconnect.
+      connectivityController.add(true);
+
+      await untilCalled(() => synchronizationService.synchronizeOnce());
+
+      verify(() => synchronizationService.synchronizeOnce()).called(1);
 
       await coordinator.stop();
     },
   );
+
+  test('stops cleanly and does not start synchronization again', () async {
+    when(
+      () => repository.watchReadyOperations(),
+    ).thenAnswer((_) => Stream.value([SyncFixtures.operation()]));
+
+    final coordinator = createCoordinator();
+
+    await coordinator.start();
+
+    await untilCalled(() => synchronizationService.synchronizeOnce());
+
+    await coordinator.stop();
+
+    await coordinator.syncNow();
+
+    verify(() => synchronizationService.synchronizeOnce()).called(1);
+  });
 }

@@ -8,10 +8,12 @@ import 'package:fieldsync/features/sync/data/policies/exponential_backoff_retry_
 import 'package:fieldsync/features/sync/data/repositories/pending_operations_repository_impl.dart';
 import 'package:fieldsync/features/sync/data/services/remote_sync_service.dart';
 import 'package:fieldsync/features/sync/data/services/sync_coordinator_impl.dart';
+import 'package:fieldsync/features/sync/data/services/synchronization_service_impl.dart';
 import 'package:fieldsync/features/sync/domain/entities/pending_operation_entity.dart';
 import 'package:fieldsync/features/sync/domain/handlers/sync_handler.dart';
 import 'package:fieldsync/features/sync/domain/policies/retry_policy.dart';
 import 'package:fieldsync/features/sync/domain/repositories/pending_operations_repository.dart';
+import 'package:fieldsync/features/sync/domain/services/synchronization_service.dart';
 import 'package:fieldsync/features/sync/domain/services/sync_coordinator.dart';
 import 'package:fieldsync/features/sync/presentation/providers/connectivity_provider.dart';
 import 'package:fieldsync/features/sync/presentation/providers/sync_logger_provider.dart';
@@ -68,12 +70,20 @@ final syncHandlersProvider = Provider<List<SyncHandler>>((ref) {
   return [ref.watch(surveySyncHandlerProvider)];
 });
 
+final synchronizationServiceProvider = Provider<SynchronizationService>((ref) {
+  return SynchronizationServiceImpl(
+    ref.watch(pendingOperationsRepositoryProvider),
+    ref.watch(syncHandlersProvider),
+    ref.watch(retryPolicyProvider),
+    ref.watch(syncLoggerProvider),
+  );
+});
+
 final syncCoordinatorProvider = Provider<SyncCoordinator>((ref) {
   final coordinator = SyncCoordinatorImpl(
     ref.watch(connectivityServiceProvider),
     ref.watch(pendingOperationsRepositoryProvider),
-    ref.watch(syncHandlersProvider),
-    ref.watch(retryPolicyProvider),
+    ref.watch(synchronizationServiceProvider),
     ref.watch(syncLoggerProvider),
   );
 

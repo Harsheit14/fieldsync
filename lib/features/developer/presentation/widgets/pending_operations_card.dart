@@ -35,9 +35,11 @@ class PendingOperationsCard extends StatelessWidget {
                         '${operation.operationType.name} ${operation.entityType}',
                       ),
                       subtitle: Text(
+                        'Operation: ${operation.id}\n'
                         'Entity: ${operation.entityId}\n'
                         'Retries: ${operation.retryCount} · '
-                        'Created: ${operation.createdAt.toLocal().toIso8601String()}',
+                        'Created: ${operation.createdAt.toLocal().toIso8601String()}'
+                        '${operation.errorMessage == null ? '' : '\nError: ${operation.errorMessage}'}',
                       ),
                       trailing: Text(operation.status.name),
                     );

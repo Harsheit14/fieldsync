@@ -16,11 +16,11 @@ class SurveyDao extends DatabaseAccessor<AppDatabase> with _$SurveyDaoMixin {
     return update(surveys).replace(survey);
   }
 
-  Future<int> markSurveyDeleted(String id) {
+  Future<int> markSurveyDeleted(String id, DateTime updatedAt) {
     return (update(surveys)..where((survey) => survey.id.equals(id))).write(
       SurveysCompanion(
         isDeleted: const Value(true),
-        updatedAt: Value(DateTime.now()),
+        updatedAt: Value(updatedAt),
       ),
     );
   }

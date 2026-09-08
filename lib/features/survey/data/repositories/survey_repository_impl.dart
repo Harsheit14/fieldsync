@@ -52,11 +52,25 @@ class SurveyRepositoryImpl implements SurveyRepository {
         return;
       }
 
+      final deletedAt = DateTime.now();
       final entity = _surveyMapper.toEntity(survey);
 
-      await _surveyDao.markSurveyDeleted(id);
+      await _surveyDao.markSurveyDeleted(id, deletedAt);
 
-      await _enqueueOperation(entity, PendingOperationType.delete);
+      final deletedEntity = SurveyEntity(
+        id: entity.id,
+        farmerName: entity.farmerName,
+        cropType: entity.cropType,
+        fieldArea: entity.fieldArea,
+        latitude: entity.latitude,
+        longitude: entity.longitude,
+        photoPaths: entity.photoPaths,
+        status: entity.status,
+        createdAt: entity.createdAt,
+        updatedAt: deletedAt,
+      );
+
+      await _enqueueOperation(deletedEntity, PendingOperationType.delete);
     });
   }
 

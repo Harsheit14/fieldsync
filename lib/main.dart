@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:workmanager/workmanager.dart';
 
 import 'app/app.dart';
 import 'core/config/app_config.dart';
+import 'features/sync/background/sync_background_worker.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -10,11 +12,11 @@ Future<void> main() async {
   try {
     await AppConfig.initialize();
 
-    runApp(
-      const ProviderScope(
-        child: FieldSyncApp(),
-      ),
-    );
+    await Workmanager().initialize(syncBackgroundCallback);
+
+    registerSyncBackgroundTask();
+
+    runApp(const ProviderScope(child: FieldSyncApp()));
   } catch (error, stackTrace) {
     debugPrint('========================================');
     debugPrint('FIELD SYNC STARTUP ERROR');
@@ -23,21 +25,12 @@ Future<void> main() async {
     debugPrint(stackTrace.toString());
     debugPrint('========================================');
 
-    runApp(
-      ProviderScope(
-        child: StartupErrorApp(
-          error: error,
-        ),
-      ),
-    );
+    runApp(ProviderScope(child: StartupErrorApp(error: error)));
   }
 }
 
 class StartupErrorApp extends StatelessWidget {
-  const StartupErrorApp({
-    super.key,
-    required this.error,
-  });
+  const StartupErrorApp({super.key, required this.error});
 
   final Object error;
 

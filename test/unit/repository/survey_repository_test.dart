@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:fieldsync/features/survey/data/local/dao/survey_dao.dart';
 import 'package:fieldsync/features/survey/data/mappers/survey_mapper.dart';
 import 'package:fieldsync/features/survey/data/repositories/survey_repository_impl.dart';
@@ -10,61 +11,58 @@ import '../../helpers/fake/in_memory_database.dart';
 import '../../helpers/fixtures/sync_fixtures.dart';
 
 void main() {
-  test(
-    'updates survey in place while preserving id and photo paths',
-    () async {
-      final database = createInMemoryDatabase();
-      addTearDown(database.close);
-      final repository = SurveyRepositoryImpl(
-        SurveyDao(database),
-        const SurveyMapper(),
-        SyncLoggerImpl(),
-      );
-      final survey = SurveyEntity(
-        id: 'survey-1',
-        farmerName: 'Ada Farmer',
-        cropType: 'Wheat',
-        fieldArea: 12.5,
-        latitude: 12.34,
-        longitude: 56.78,
-        photoPaths: const ['/tmp/fieldsync-photo.jpg'],
-        status: 'active',
-        createdAt: DateTime.utc(2025, 1, 1, 12),
-        updatedAt: DateTime.utc(2025, 1, 1, 12),
-      );
-      final updated = SurveyEntity(
-        id: survey.id,
-        farmerName: 'Grace Farmer',
-        cropType: 'Corn',
-        fieldArea: 18.75,
-        latitude: survey.latitude,
-        longitude: survey.longitude,
-        photoPaths: survey.photoPaths,
-        status: survey.status,
-        createdAt: survey.createdAt,
-        updatedAt: survey.updatedAt.add(const Duration(minutes: 2)),
-      );
+  test('updates survey in place while preserving id and photo paths', () async {
+    final database = createInMemoryDatabase();
+    addTearDown(database.close);
+    final repository = SurveyRepositoryImpl(
+      SurveyDao(database),
+      const SurveyMapper(),
+      SyncLoggerImpl(),
+    );
+    final survey = SurveyEntity(
+      id: 'survey-1',
+      farmerName: 'Ada Farmer',
+      cropType: 'Wheat',
+      fieldArea: 12.5,
+      latitude: 12.34,
+      longitude: 56.78,
+      photoPaths: const ['/tmp/fieldsync-photo.jpg'],
+      status: 'active',
+      createdAt: DateTime.utc(2025, 1, 1, 12),
+      updatedAt: DateTime.utc(2025, 1, 1, 12),
+    );
+    final updated = SurveyEntity(
+      id: survey.id,
+      farmerName: 'Grace Farmer',
+      cropType: 'Corn',
+      fieldArea: 18.75,
+      latitude: survey.latitude,
+      longitude: survey.longitude,
+      photoPaths: survey.photoPaths,
+      status: survey.status,
+      createdAt: survey.createdAt,
+      updatedAt: survey.updatedAt.add(const Duration(minutes: 2)),
+    );
 
-      await repository.createSurvey(survey);
-      await repository.updateSurvey(updated);
+    await repository.createSurvey(survey);
+    await repository.updateSurvey(updated);
 
-      final loaded = await repository.getSurveyById(survey.id);
-      expect(loaded?.id, survey.id);
-      expect(loaded?.farmerName, 'Grace Farmer');
-      expect(loaded?.cropType, 'Corn');
-      expect(loaded?.fieldArea, 18.75);
-      expect(loaded?.photoPaths, survey.photoPaths);
+    final loaded = await repository.getSurveyById(survey.id);
+    expect(loaded?.id, survey.id);
+    expect(loaded?.farmerName, 'Grace Farmer');
+    expect(loaded?.cropType, 'Corn');
+    expect(loaded?.fieldArea, 18.75);
+    expect(loaded?.photoPaths, survey.photoPaths);
 
-      final operations = await PendingOperationsDao(
-        database,
-      ).watchAllOperations().first;
-      expect(operations, hasLength(2));
-      expect(operations.map((operation) => operation.operationType), [
-        'create',
-        'update',
-      ]);
-    },
-  );
+    final operations = await PendingOperationsDao(
+      database,
+    ).watchAllOperations().first;
+    expect(operations, hasLength(2));
+    expect(operations.map((operation) => operation.operationType), [
+      'create',
+      'update',
+    ]);
+  });
 
   test(
     'creates survey and outbox operation in one repository transaction',
@@ -120,13 +118,33 @@ void main() {
     await repository.deleteSurvey(updated.id);
 
     expect(await repository.watchAllSurveys().first, isEmpty);
+
+    final deletedSurvey = await SurveyDao(database).getSurveyById(updated.id);
+
+    expect(deletedSurvey?.isDeleted, isTrue);
+    expect(deletedSurvey?.updatedAt.isAfter(updated.updatedAt), isTrue);
+
     final operations = await PendingOperationsDao(
       database,
     ).watchAllOperations().first;
+
     expect(operations.map((operation) => operation.operationType), [
       'create',
       'update',
       'delete',
     ]);
+
+    final deleteOperation = operations.firstWhere(
+      (operation) => operation.operationType == 'delete',
+    );
+
+    final deletePayload =
+        jsonDecode(deleteOperation.payload) as Map<String, dynamic>;
+
+    final deleteUpdatedAt = DateTime.parse(
+      deletePayload['updatedAt'] as String,
+    );
+
+    expect(deleteUpdatedAt.isAfter(updated.updatedAt), isTrue);
   });
 }

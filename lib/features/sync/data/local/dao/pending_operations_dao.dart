@@ -169,4 +169,14 @@ class PendingOperationsDao extends DatabaseAccessor<AppDatabase>
           ),
         );
   }
+
+  Future<int> clearCompletedOperations() {
+    return (delete(pendingOperations)
+          ..where(
+            (operation) => operation.status.equals(
+              PendingOperationStatus.completed.name,
+            ),
+          ))
+        .go();
+  }
 }

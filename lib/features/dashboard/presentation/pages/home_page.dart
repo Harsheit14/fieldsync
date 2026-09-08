@@ -6,11 +6,13 @@ import 'package:fieldsync/features/survey/presentation/state/survey_list_state.d
 import 'package:fieldsync/features/survey/presentation/widgets/empty_surveys_widget.dart';
 import 'package:fieldsync/features/survey/presentation/widgets/loading_surveys_widget.dart';
 import 'package:fieldsync/features/survey/presentation/widgets/survey_card.dart';
+import 'package:fieldsync/features/sync/presentation/providers/sync_metrics_provider.dart';
+import 'package:fieldsync/features/sync/presentation/providers/sync_provider.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-
+import 'package:fieldsync/features/sync/domain/metrics/sync_metrics.dart';
 class HomePage extends ConsumerWidget {
   const HomePage({super.key});
 
@@ -18,6 +20,8 @@ class HomePage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final state = ref.watch(surveyListControllerProvider);
     final deletingIds = ref.watch(deleteSurveyNotifierProvider);
+    final syncStatus = ref.watch(syncStatusProvider);
+    final syncMetrics = ref.watch(syncMetricsProvider);
 
     return Scaffold(
       appBar: AppBar(
@@ -32,20 +36,30 @@ class HomePage extends ConsumerWidget {
             ),
         ],
       ),
-
       body: SafeArea(
-        child: switch (state) {
-          SurveyListLoading() => const LoadingSurveysWidget(),
-          SurveyListEmpty() => const _DashboardEmptyState(),
-          SurveyListLoaded(:final surveys) => _DashboardSurveyList(
-            surveys: surveys,
-            deletingIds: deletingIds,
-            onDelete: (survey) => _confirmDeleteSurvey(context, ref, survey),
-          ),
-          SurveyListError(:final error) => _DashboardError(error: error),
-        },
+        child: Column(
+          children: [
+            _SyncStatusCard(
+              syncStatus: syncStatus,
+              syncMetrics: syncMetrics,
+            ),
+            Expanded(
+              child: switch (state) {
+                SurveyListLoading() => const LoadingSurveysWidget(),
+                SurveyListEmpty() => const _DashboardEmptyState(),
+                SurveyListLoaded(:final surveys) => _DashboardSurveyList(
+                  surveys: surveys,
+                  deletingIds: deletingIds,
+                  onDelete: (survey) =>
+                      _confirmDeleteSurvey(context, ref, survey),
+                ),
+                SurveyListError(:final error) =>
+                  _DashboardError(error: error),
+              },
+            ),
+          ],
+        ),
       ),
-
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () =>
             context.push(AppRoutes.createSurvey),
@@ -53,6 +67,124 @@ class HomePage extends ConsumerWidget {
         label: const Text('New Survey'),
       ),
     );
+  }
+}
+
+class _SyncStatusCard extends StatelessWidget {
+  const _SyncStatusCard({
+    required this.syncStatus,
+    required this.syncMetrics,
+  });
+
+  final AsyncValue<bool> syncStatus;
+  final AsyncValue<SyncMetrics> syncMetrics;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    final isSyncing = syncStatus.valueOrNull ?? false;
+    final metrics = syncMetrics.valueOrNull;
+
+    final queueSize = metrics?.queueSize ?? 0;
+    final failedCount = metrics?.failedCount ?? 0;
+    final retryCount = metrics?.retryScheduledCount ?? 0;
+
+    final statusText = isSyncing
+        ? 'Syncing data...'
+        : queueSize > 0
+            ? 'Waiting to sync'
+            : 'All data synchronized';
+
+    final statusIcon = isSyncing
+        ? Icons.sync
+        : queueSize > 0
+            ? Icons.cloud_upload_outlined
+            : Icons.cloud_done_outlined;
+
+    final statusColor = failedCount > 0
+        ? colorScheme.error
+        : isSyncing
+            ? colorScheme.primary
+            : colorScheme.secondary;
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: colorScheme.outlineVariant,
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            statusIcon,
+            color: statusColor,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  statusText,
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  _buildDetails(
+                    queueSize,
+                    failedCount,
+                    retryCount,
+                  ),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          ),
+          if (isSyncing)
+            const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  String _buildDetails(
+    int queueSize,
+    int failedCount,
+    int retryCount,
+  ) {
+    final details = <String>[];
+
+    if (queueSize > 0) {
+      details.add('$queueSize queued');
+    }
+
+    if (retryCount > 0) {
+      details.add('$retryCount retrying');
+    }
+
+    if (failedCount > 0) {
+      details.add('$failedCount failed');
+    }
+
+    if (details.isEmpty) {
+      return 'Local changes are synchronized with the server.';
+    }
+
+    return details.join(' • ');
   }
 }
 
@@ -84,7 +216,8 @@ class _DashboardSurveyList extends StatelessWidget {
             onDelete: () => onDelete(surveys[index]),
             isDeleteLoading: deletingIds.contains(surveys[index].id),
           ),
-          separatorBuilder: (context, index) => const SizedBox(height: 12),
+          separatorBuilder: (context, index) =>
+              const SizedBox(height: 12),
         ),
       ),
     );
@@ -127,19 +260,28 @@ Future<void> _confirmDeleteSurvey(
   }
 
   try {
-    await ref.read(deleteSurveyNotifierProvider.notifier).deleteSurvey(survey);
+    await ref
+        .read(deleteSurveyNotifierProvider.notifier)
+        .deleteSurvey(survey);
+
     if (!context.mounted) {
       return;
     }
+
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Survey deleted successfully.')),
+      const SnackBar(
+        content: Text('Survey deleted successfully.'),
+      ),
     );
   } catch (error) {
     if (!context.mounted) {
       return;
     }
+
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Unable to delete survey: $error')),
+      SnackBar(
+        content: Text('Unable to delete survey: $error'),
+      ),
     );
   }
 }
@@ -149,12 +291,16 @@ class _DashboardEmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Center(child: EmptySurveysWidget());
+    return const Center(
+      child: EmptySurveysWidget(),
+    );
   }
 }
 
 class _DashboardError extends StatelessWidget {
-  const _DashboardError({required this.error});
+  const _DashboardError({
+    required this.error,
+  });
 
   final Object error;
 
@@ -168,7 +314,11 @@ class _DashboardError extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.error_outline, color: colorScheme.error, size: 48),
+            Icon(
+              Icons.error_outline,
+              color: colorScheme.error,
+              size: 48,
+            ),
             const SizedBox(height: 16),
             Text(
               'Unable to load surveys',

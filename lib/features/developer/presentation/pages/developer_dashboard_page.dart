@@ -23,7 +23,9 @@ class DeveloperDashboardPage extends ConsumerWidget {
     final logs = ref.watch(syncLogsProvider).valueOrNull ?? [];
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Developer dashboard')),
+      appBar: AppBar(
+        title: const Text('Developer dashboard'),
+      ),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(16),
@@ -44,14 +46,18 @@ class DeveloperDashboardPage extends ConsumerWidget {
                 ),
               ),
             const SizedBox(height: 12),
-            PendingOperationsCard(operations: operations),
+            PendingOperationsCard(
+              operations: operations,
+            ),
             const SizedBox(height: 12),
-            SyncLogsCard(logs: logs),
+            SyncLogsCard(
+              logs: logs,
+            ),
             const SizedBox(height: 12),
             ActionPanel(
-              onForceSync: () => _forceSync(context),
+              onForceSync: () => _forceSync(context, ref),
               onClearCompletedOperations: () =>
-                  _clearCompletedOperations(context),
+                  _clearCompletedOperations(context, ref),
               onExportLogs: () => _exportLogs(context),
               onResetMetrics: () => _resetMetrics(context),
             ),
@@ -61,32 +67,96 @@ class DeveloperDashboardPage extends ConsumerWidget {
     );
   }
 
-  // Placeholder until SyncCoordinator exposes an explicit force-sync command.
-  void _forceSync(BuildContext context) {
-    _showUnavailable(context, 'Force sync is not available yet.');
+  Future<void> _forceSync(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    final connectivity = ref.read(connectivityStreamProvider).valueOrNull;
+
+    if (connectivity != true) {
+      _showMessage(
+        context,
+        'Cannot force sync while offline.',
+      );
+      return;
+    }
+
+    try {
+      await ref.read(syncCoordinatorProvider).syncNow();
+
+      if (!context.mounted) {
+        return;
+      }
+
+      _showMessage(
+        context,
+        'Synchronization triggered.',
+      );
+    } catch (error) {
+      if (!context.mounted) {
+        return;
+      }
+
+      _showMessage(
+        context,
+        'Unable to start synchronization: $error',
+      );
+    }
   }
 
-  // Placeholder until the outbox exposes a completed-operation cleanup command.
-  void _clearCompletedOperations(BuildContext context) {
-    _showUnavailable(
+  Future<void> _clearCompletedOperations(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    try {
+      final count = await ref
+          .read(pendingOperationsRepositoryProvider)
+          .clearCompletedOperations();
+
+      if (!context.mounted) {
+        return;
+      }
+
+      _showMessage(
+        context,
+        count == 0
+            ? 'No completed operations to clear.'
+            : 'Cleared $count completed operation(s).',
+      );
+    } catch (error) {
+      if (!context.mounted) {
+        return;
+      }
+
+      _showMessage(
+        context,
+        'Unable to clear completed operations: $error',
+      );
+    }
+  }
+
+  void _exportLogs(BuildContext context) {
+    _showMessage(
       context,
-      'Clearing completed operations is not available yet.',
+      'Log export is not available yet.',
     );
   }
 
-  // Placeholder until SyncLogger has an export implementation.
-  void _exportLogs(BuildContext context) {
-    _showUnavailable(context, 'Log export is not available yet.');
-  }
-
-  // Placeholder until the metrics service supports resettable aggregation.
   void _resetMetrics(BuildContext context) {
-    _showUnavailable(context, 'Resetting metrics is not available yet.');
+    _showMessage(
+      context,
+      'Metrics reset is not available yet.',
+    );
   }
 
-  void _showUnavailable(BuildContext context, String message) {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
+  void _showMessage(
+    BuildContext context,
+    String message,
+  ) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+      ),
+    );
   }
 }

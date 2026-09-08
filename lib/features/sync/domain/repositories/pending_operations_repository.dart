@@ -21,4 +21,6 @@ abstract class PendingOperationsRepository {
   Future<void> markCompleted(String id);
 
   Future<void> markFailed(String id, String errorMessage);
+
+  Future<int> clearCompletedOperations();
 }

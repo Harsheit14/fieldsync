@@ -15,6 +15,7 @@ class PendingOperationsRepositoryImpl implements PendingOperationsRepository {
   @override
   Future<void> enqueueOperation(PendingOperationEntity operation) async {
     await _dao.enqueue(_mapper.toCompanion(operation));
+
     await _syncLogger.log(
       SyncLogEntry(
         timestamp: DateTime.now(),
@@ -38,6 +39,7 @@ class PendingOperationsRepositoryImpl implements PendingOperationsRepository {
   @override
   Future<PendingOperationEntity?> getNextScheduledOperation() async {
     final operation = await _dao.getNextScheduledOperation();
+
     return operation == null ? null : _mapper.toEntity(operation);
   }
 
@@ -74,5 +76,10 @@ class PendingOperationsRepositoryImpl implements PendingOperationsRepository {
   @override
   Future<void> markFailed(String id, String errorMessage) async {
     await _dao.markFailed(id, errorMessage);
+  }
+
+  @override
+  Future<int> clearCompletedOperations() {
+    return _dao.clearCompletedOperations();
   }
 }

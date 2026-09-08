@@ -1,27 +1,8 @@
 import 'dotenv/config';
 
-import express from 'express';
-import cors from 'cors';
-
+import { app } from './app.js';
 import { checkDatabaseConnection } from './config/database.js';
 import { env } from './config/env.js';
-import { syncRouter } from './routes/sync.routes.js';
-
-const app = express();
-
-app.use(cors());
-app.use(express.json());
-
-app.get('/api/health', (_req, res) => {
-  res.json({
-    success: true,
-    service: 'fieldsync-api',
-    status: 'healthy',
-    timestamp: new Date().toISOString(),
-  });
-});
-
-app.use('/api', syncRouter);
 
 async function bootstrap(): Promise<void> {
   try {

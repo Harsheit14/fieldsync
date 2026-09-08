@@ -3,5 +3,7 @@ abstract class SyncCoordinator {
 
   Future<void> stop();
 
+  Future<void> syncNow();
+
   bool get isRunning;
 }

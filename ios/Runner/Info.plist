@@ -40,6 +40,15 @@
 	<true/>
 
 	<!-- ============================= -->
+	<!-- Background Tasks              -->
+	<!-- ============================= -->
+
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>fieldsync-background-sync</string>
+	</array>
+
+	<!-- ============================= -->
 	<!-- Camera Permissions            -->
 	<!-- ============================= -->
 
