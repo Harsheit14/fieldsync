@@ -1,12 +1,15 @@
 import 'dart:io';
 
+import 'package:fieldsync/features/storage/domain/usecases/read_file_usecase.dart';
 import 'package:flutter/material.dart';
+
 import 'package:fieldsync/features/survey/domain/entities/survey_entity.dart';
 
 class SurveyCard extends StatelessWidget {
   const SurveyCard({
     super.key,
     required this.survey,
+    required this.readFileUseCase,
     this.onLongPress,
     this.onEdit,
     this.onDelete,
@@ -14,6 +17,7 @@ class SurveyCard extends StatelessWidget {
   });
 
   final SurveyEntity survey;
+  final ReadFileUseCase readFileUseCase;
   final VoidCallback? onLongPress;
   final VoidCallback? onEdit;
   final VoidCallback? onDelete;
@@ -37,7 +41,10 @@ class SurveyCard extends StatelessWidget {
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _SurveyThumbnail(photoPath: _firstPhotoPath()),
+                  _SurveyThumbnail(
+                    photoPath: _firstPhotoPath(),
+                    readFileUseCase: readFileUseCase,
+                  ),
                   const SizedBox(width: 16),
                   Expanded(
                     child: Column(
@@ -155,7 +162,8 @@ class SurveyCard extends StatelessWidget {
       return null;
     }
 
-    return 'Location: ${survey.latitude.toStringAsFixed(5)}, ${survey.longitude.toStringAsFixed(5)}';
+    return 'Location: ${survey.latitude.toStringAsFixed(5)}, '
+        '${survey.longitude.toStringAsFixed(5)}';
   }
 
   String _formatDateTime(DateTime dateTime) {
@@ -165,6 +173,7 @@ class SurveyCard extends StatelessWidget {
     final year = localDate.year.toString();
     final hour = localDate.hour.toString().padLeft(2, '0');
     final minute = localDate.minute.toString().padLeft(2, '0');
+
     return '$day/$month/$year $hour:$minute';
   }
 }
@@ -172,9 +181,13 @@ class SurveyCard extends StatelessWidget {
 enum _SurveyCardAction { edit, delete }
 
 class _SurveyThumbnail extends StatelessWidget {
-  const _SurveyThumbnail({required this.photoPath});
+  const _SurveyThumbnail({
+    required this.photoPath,
+    required this.readFileUseCase,
+  });
 
   final String? photoPath;
+  final ReadFileUseCase readFileUseCase;
 
   @override
   Widget build(BuildContext context) {
@@ -192,26 +205,66 @@ class _SurveyThumbnail extends StatelessWidget {
       );
     }
 
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(14),
-      child: SizedBox(
-        width: 72,
-        height: 72,
-        child: Image.file(
-          File(photoPath!),
-          fit: BoxFit.cover,
-          errorBuilder: (context, error, stackTrace) {
-            return Container(
+    return FutureBuilder(
+      future: readFileUseCase(photoPath!),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return Container(
+            width: 72,
+            height: 72,
+            decoration: BoxDecoration(
               color: colorScheme.surfaceContainerHighest,
-              alignment: Alignment.center,
-              child: Icon(
-                Icons.broken_image_outlined,
-                color: colorScheme.outline,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: const Center(
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
               ),
-            );
-          },
-        ),
-      ),
+            ),
+          );
+        }
+
+        final storedFile = snapshot.data;
+
+        if (storedFile == null) {
+          return Container(
+            width: 72,
+            height: 72,
+            decoration: BoxDecoration(
+              color: colorScheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Icon(
+              Icons.broken_image_outlined,
+              color: colorScheme.outline,
+            ),
+          );
+        }
+
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(14),
+          child: SizedBox(
+            width: 72,
+            height: 72,
+            child: Image.file(
+              File(storedFile.path),
+              fit: BoxFit.cover,
+              errorBuilder: (context, error, stackTrace) {
+                return Container(
+                  color: colorScheme.surfaceContainerHighest,
+                  alignment: Alignment.center,
+                  child: Icon(
+                    Icons.broken_image_outlined,
+                    color: colorScheme.outline,
+                  ),
+                );
+              },
+            ),
+          ),
+        );
+      },
     );
   }
 }

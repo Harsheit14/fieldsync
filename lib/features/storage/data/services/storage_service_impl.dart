@@ -11,18 +11,19 @@ import '../../domain/services/storage_service.dart';
 class StorageServiceImpl implements StorageService {
   static const _uuid = Uuid();
 
+  static const _storageRoot = 'FieldSync';
+  static const _surveyImagesDirectory = 'surveys/images';
+
   @override
   Future<StoredFileEntity> saveFile(String sourcePath) async {
     try {
-      final documentsDirectory =
-          await getApplicationDocumentsDirectory();
+      final documentsDirectory = await getApplicationDocumentsDirectory();
 
       final imagesDirectory = Directory(
         path.join(
           documentsDirectory.path,
-          'FieldSync',
-          'surveys',
-          'images',
+          _storageRoot,
+          _surveyImagesDirectory,
         ),
       );
 
@@ -31,20 +32,15 @@ class StorageServiceImpl implements StorageService {
       }
 
       final extension = path.extension(sourcePath);
-
       final fileName = 'survey_${_uuid.v4()}$extension';
 
-      final destinationPath = path.join(
-        imagesDirectory.path,
-        fileName,
-      );
+      final destinationPath = path.join(imagesDirectory.path, fileName);
 
       final sourceFile = File(sourcePath);
-
       final storedFile = await sourceFile.copy(destinationPath);
 
       return StoredFileEntity(
-        path: storedFile.path,
+        path: path.join(_surveyImagesDirectory, fileName),
         fileName: fileName,
         sizeInBytes: await storedFile.length(),
         createdAt: DateTime.now(),
@@ -55,9 +51,9 @@ class StorageServiceImpl implements StorageService {
   }
 
   @override
-  Future<void> deleteFile(String path) async {
+  Future<void> deleteFile(String filePath) async {
     try {
-      final file = File(path);
+      final file = await _resolveFile(filePath);
 
       if (await file.exists()) {
         await file.delete();
@@ -68,9 +64,9 @@ class StorageServiceImpl implements StorageService {
   }
 
   @override
-  Future<StoredFileEntity?> readFile(String path) async {
+  Future<StoredFileEntity?> readFile(String filePath) async {
     try {
-      final file = File(path);
+      final file = await _resolveFile(filePath);
 
       if (!await file.exists()) {
         return null;
@@ -85,5 +81,15 @@ class StorageServiceImpl implements StorageService {
     } catch (_) {
       throw const ReadFileException();
     }
+  }
+
+  Future<File> _resolveFile(String filePath) async {
+    if (path.isAbsolute(filePath)) {
+      return File(filePath);
+    }
+
+    final documentsDirectory = await getApplicationDocumentsDirectory();
+
+    return File(path.join(documentsDirectory.path, _storageRoot, filePath));
   }
 }
